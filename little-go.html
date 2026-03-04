@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>盖县五子棋</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #111820;
+  color: #e0d4bc;
+  font-family: 'PingFang SC', 'Microsoft YaHei', 'SimHei', sans-serif;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100vh;
+  padding: 12px 10px 24px;
+  gap: 8px;
+}
+h1 {
+  font-size: 22px;
+  letter-spacing: 6px;
+  color: #c89040;
+  margin-top: 4px;
+}
+#status {
+  background: #1a2535;
+  border: 1px solid #2a3a50;
+  border-radius: 20px;
+  padding: 7px 18px;
+  font-size: 13px;
+  width: min(480px, calc(100vw - 20px));
+  text-align: center;
+  transition: color 0.2s;
+}
+#status.capture { color: #e06040; }
+#status.won { color: #60d060; font-weight: bold; }
+#players {
+  display: flex;
+  gap: 10px;
+  width: min(480px, calc(100vw - 20px));
+}
+.pcard {
+  flex: 1;
+  background: #1a2535;
+  border: 2px solid #2a3a50;
+  border-radius: 10px;
+  padding: 8px 12px;
+  transition: border-color 0.25s, box-shadow 0.25s;
+}
+.pcard.active { border-color: #c89040; box-shadow: 0 0 10px rgba(200,144,64,0.3); }
+.pcard.won    { border-color: #50c050; box-shadow: 0 0 12px rgba(80,192,80,0.35); }
+.pname { font-size: 14px; font-weight: bold; margin-bottom: 3px; }
+.pstats { font-size: 11px; color: #6a7e90; }
+canvas {
+  display: block;
+  cursor: pointer;
+  border-radius: 4px;
+  width: min(480px, calc(100vw - 20px));
+  height: min(480px, calc(100vw - 20px));
+  touch-action: none;
+}
+#btns { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+button {
+  padding: 9px 16px;
+  border-radius: 6px;
+  border: 1px solid #3a5060;
+  background: #1a2535;
+  color: #c89040;
+  font-size: 14px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+button:hover { background: #253545; }
+button:active { background: #2e4258; }
+button:disabled { opacity: 0.35; cursor: default; }
+button:disabled:hover { background: #1a2535; }
+#rbtn { color: #6a7e90; border-color: #2a3a50; }
+#rules {
+  display: none;
+  background: #1a2535;
+  border: 1px solid #2a3a50;
+  border-radius: 8px;
+  padding: 14px 16px;
+  width: min(480px, calc(100vw - 20px));
+  font-size: 12.5px;
+  line-height: 1.9;
+  color: #a0a8b0;
+}
+#rules b { color: #c89040; }
+</style>
+</head>
+<body>
+
+<h1>盖县五子棋</h1>
+<div id="status">游戏开始，黑方先手</div>
+
+<div id="players">
+  <div class="pcard active" id="pc-B">
+    <div class="pname">⚫ 黑方</div>
+    <div class="pstats" id="ps-B">剩余 8 子 ｜ 棋盘 0 ｜ 手中 8</div>
+  </div>
+  <div class="pcard" id="pc-W">
+    <div class="pname">⚪ 白方</div>
+    <div class="pstats" id="ps-W">剩余 8 子 ｜ 棋盘 0 ｜ 手中 8</div>
+  </div>
+</div>
+
+<canvas id="c" width="480" height="480"></canvas>
+
+<div id="btns">
+  <button onclick="newGame()">重新开始</button>
+  <button id="ubtn" onclick="doUndo()" disabled>悔棋 (3)</button>
+  <button id="rbtn" onclick="toggleRules()">游戏规则 ▾</button>
+</div>
+
+<div id="rules">
+  <b>棋盘：</b>5×5 方格，25 个交叉点，双方各 8 枚棋子<br>
+  <b>阶段一·落子：</b>双方轮流在空点落子。落子后若在任一方向连成<b>恰好 3 或 5 子</b>（连成 4 子不触发），则可提走对方任意 1 枚棋子。<br>
+  其中<b>横线/竖线</b>必须恰好 5 子；<b>斜线</b> 3、4、5 子（两端须在边线上）均有效。<br>
+  对方剩余不足 3 子→胜；棋盘落满或双方均无子可落→进入走子阶段。<br>
+  <b>阶段二·走子：</b>轮流将一枚己方棋子移动到<b>相邻（上下左右）</b>空点。
+  移动后连成有效的恰好 3 或 5 子→提走对方 1 枚棋子。<br>
+  对方剩余不足 3 子→胜；对方无合法走法→胜。
+</div>
+
+<script>
+// ── 常量 ─────────────────────────────────────────────────────────
+const SZ = 480, M = 50, CELL = (SZ - 2*M) / 4;
+const PR  = Math.round(CELL * 0.37);   // 棋子半径
+const HR  = CELL * 0.48;               // 点击判定半径
+const DIRS = [[0,1],[1,0],[1,1],[1,-1]];
+const ADJ4 = [[0,1],[0,-1],[1,0],[-1,0]];
+
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+
+// ── 游戏状态 ──────────────────────────────────────────────────────
+let g;
+
+function newGame() {
+  g = {
+    b:      Array.from({length:5}, () => Array(5).fill(null)), // null | 'B' | 'W'
+    turn:   'B',          // 当前行棋方
+    phase:  'place',      // 'place' | 'move'
+    mode:   'play',       // 'play' | 'capture' | 'won'
+    winner: null,
+    total:  {B:8, W:8}, // 各方剩余棋子总数（棋盘+手中）
+    sel:    null,         // 走子阶段选中的棋子 {r,c}
+    prevState:  null,     // 悔棋快照（最多1步）
+    undosLeft:  3,        // 本局剩余悔棋次数
+  };
+  refresh(); draw();
+}
+
+// ── 工具函数 ──────────────────────────────────────────────────────
+const opp = p => p === 'B' ? 'W' : 'B';
+
+function countOn(p) {
+  let n = 0;
+  for (let r=0;r<5;r++) for (let c=0;c<5;c++) if (g.b[r][c]===p) n++;
+  return n;
+}
+function boardTotal() { return countOn('B') + countOn('W'); }
+function inHand(p)    { return Math.max(0, g.total[p] - countOn(p)); }
+
+// 棋盘坐标 → 像素坐标
+function px(r,c) { return [M + c*CELL, M + r*CELL]; }
+
+// 像素坐标 → 最近交叉点（若超出判定半径返回 null）
+function nearest(x, y) {
+  let best=null, bd=Infinity;
+  for (let r=0;r<5;r++) for (let c=0;c<5;c++) {
+    const [bx,by] = px(r,c);
+    const d = Math.hypot(x-bx, y-by);
+    if (d < bd) { bd=d; best={r,c}; }
+  }
+  return bd <= HR ? best : null;
+}
+
+// 计算以 (r,c) 为中心、方向 (dr,dc) 上同色连续子数
+function runLen(r, c, dr, dc) {
+  const col = g.b[r][c]; if (!col) return 0;
+  let n = 1;
+  for (let s=1;s<6;s++) {
+    const nr=r+dr*s, nc=c+dc*s;
+    if (nr<0||nr>=5||nc<0||nc>=5||g.b[nr][nc]!==col) break; n++;
+  }
+  for (let s=1;s<6;s++) {
+    const nr=r-dr*s, nc=c-dc*s;
+    if (nr<0||nr>=5||nc<0||nc>=5||g.b[nr][nc]!==col) break; n++;
+  }
+  return n;
+}
+
+// 是否在棋盘边线上
+function isEdge(r, c) { return r===0 || r===4 || c===0 || c===4; }
+
+// 落子/移动后是否形成有效的3子或5子连线
+// 直线（横/竖）：恰好3或5即可；斜线：还需两端均在边线上
+function formsMill(r, c) {
+  if (!g.b[r][c]) return false;
+  const col = g.b[r][c];
+  return DIRS.some(([dr, dc]) => {
+    const n = runLen(r, c, dr, dc);
+    if (n < 3 || n > 5) return false;
+    const isDiag = dr !== 0 && dc !== 0;
+    if (!isDiag) return n===5;          // 横/竖：必须恰好5子
+    if (n<3 || n>5) return false;       // 斜线：3、4、5子均可
+    // 斜线：两端均须在边线上
+    let r1=r, c1=c;
+    while (r1-dr>=0 && r1-dr<5 && c1-dc>=0 && c1-dc<5 && g.b[r1-dr][c1-dc]===col) { r1-=dr; c1-=dc; }
+    let r2=r, c2=c;
+    while (r2+dr>=0 && r2+dr<5 && c2+dc>=0 && c2+dc<5 && g.b[r2+dr][c2+dc]===col) { r2+=dr; c2+=dc; }
+    return isEdge(r1, c1) && isEdge(r2, c2);
+  });
+}
+
+// 获取 (r,c) 的空相邻点
+function adjEmpty(r, c) {
+  return ADJ4.map(([dr,dc])=>[r+dr,c+dc])
+             .filter(([nr,nc])=>nr>=0&&nr<5&&nc>=0&&nc<5&&!g.b[nr][nc]);
+}
+
+// 某方是否有合法走法（走子阶段）
+function hasMove(p) {
+  for (let r=0;r<5;r++) for (let c=0;c<5;c++)
+    if (g.b[r][c]===p && adjEmpty(r,c).length>0) return true;
+  return false;
+}
+
+// ── 悔棋 ─────────────────────────────────────────────────────────
+function saveState() {
+  g.prevState = {
+    b:      g.b.map(row => [...row]),
+    turn:   g.turn,
+    phase:  g.phase,
+    mode:   g.mode,
+    winner: g.winner,
+    total:  {...g.total},
+    sel:    null,
+  };
+}
+
+function doUndo() {
+  if (!g.prevState || g.undosLeft <= 0) return;
+  const undosLeft = g.undosLeft - 1;
+  const s = g.prevState;
+  g.b = s.b; g.turn = s.turn; g.phase = s.phase;
+  g.mode = s.mode; g.winner = s.winner; g.total = s.total; g.sel = null;
+  g.prevState = null;
+  g.undosLeft = undosLeft;
+  refresh(); draw();
+}
+
+// ── 游戏逻辑 ──────────────────────────────────────────────────────
+
+// 落子
+function doPlace(r, c) {
+  if (g.mode!=='play' || g.phase!=='place') return;
+  if (g.b[r][c] || inHand(g.turn)<=0) return;
+
+  saveState();
+  g.b[r][c] = g.turn;
+
+  if (formsMill(r,c)) {
+    triggerCapture();
+  } else {
+    endAction();
+  }
+  refresh(); draw();
+}
+
+// 触发提子
+function triggerCapture() {
+  const op = opp(g.turn);
+  // 若对方棋盘无子，自动从手中扣除
+  if (countOn(op) === 0) {
+    if (g.total[op] > 0) {
+      g.total[op]--;
+      if (checkWinByTotal(op)) return;
+    }
+    endAction();
+    return;
+  }
+  g.mode = 'capture';
+}
+
+// 提子操作
+function doCapture(r, c) {
+  if (g.mode!=='capture') return;
+  const op = opp(g.turn);
+  if (g.b[r][c] !== op) return;
+
+  g.b[r][c] = null;
+  g.total[op]--;
+
+  if (checkWinByTotal(op)) return;
+  endAction();
+  refresh(); draw();
+}
+
+// 检查对方是否因棋子不足失败
+function checkWinByTotal(loser) {
+  if (g.total[loser] < 3) {
+    endGame(opp(loser));
+    refresh(); draw();
+    return true;
+  }
+  return false;
+}
+
+// 走子：选中棋子
+function doSelect(r, c) {
+  if (g.mode!=='play' || g.phase!=='move') return;
+  if (g.b[r][c] === g.turn) {
+    g.sel = {r,c};
+    draw();
+  }
+}
+
+// 走子：落点
+function doMoveTo(r, c) {
+  if (!g.sel) return;
+  const {r:sr, c:sc} = g.sel;
+
+  // 点击己方其他棋子 → 重选
+  if (g.b[r][c] === g.turn) {
+    g.sel = {r,c};
+    draw();
+    return;
+  }
+
+  // 判断是否相邻且空
+  if (g.b[r][c] || Math.abs(r-sr)+Math.abs(c-sc)!==1) {
+    g.sel = null;
+    draw();
+    return;
+  }
+
+  saveState();
+  g.b[r][c] = g.turn;
+  g.b[sr][sc] = null;
+  g.sel = null;
+
+  if (formsMill(r,c)) {
+    triggerCapture();
+  } else {
+    endAction();
+  }
+  refresh(); draw();
+}
+
+// 一次行棋结束后的收尾逻辑
+function endAction() {
+  g.mode = 'play';
+  g.sel  = null;
+
+  // 阶段转换检查
+  if (g.phase === 'place') {
+    const allPlaced = (inHand('B')===0 && inHand('W')===0);
+    const full      = (boardTotal() === 25);
+    if (allPlaced || full) {
+      g.phase = 'move';
+      // 走子阶段的"剩余"只计棋盘上的棋子
+      g.total.B = countOn('B');
+      g.total.W = countOn('W');
+    }
+  }
+
+  const next = opp(g.turn);
+
+  // 走子阶段：对方无路可走 → 胜
+  if (g.phase==='move' && !hasMove(next)) {
+    endGame(g.turn);
+    return;
+  }
+
+  // 落子阶段：对方手中无子（跳过）
+  if (g.phase==='place' && inHand(next)===0) {
+    // g.turn 不变，当前方继续落子
+    return;
+  }
+
+  g.turn = next;
+}
+
+function endGame(winner) {
+  g.mode   = 'won';
+  g.winner = winner;
+}
+
+// ── 点击事件 ─────────────────────────────────────────────────────
+cv.addEventListener('click', e => {
+  if (g.mode === 'won') return;
+  const rect = cv.getBoundingClientRect();
+  const x = (e.clientX - rect.left) * (SZ / rect.width);
+  const y = (e.clientY - rect.top)  * (SZ / rect.height);
+  const hit = nearest(x, y);
+  if (!hit) return;
+  const {r, c} = hit;
+
+  if (g.mode === 'capture') {
+    doCapture(r, c);
+  } else if (g.phase === 'place') {
+    doPlace(r, c);
+  } else {
+    if (g.sel) doMoveTo(r, c);
+    else       doSelect(r, c);
+  }
+});
+
+// ── 界面更新 ──────────────────────────────────────────────────────
+function statusText() {
+  if (g.mode === 'won') return pn(g.winner) + ' 获胜！';
+  if (g.mode === 'capture') return pn(g.turn) + ' 连成三子！点击对方棋子提走一枚';
+  const ph = g.phase==='place'
+    ? `落子（手中 ${inHand(g.turn)} 枚）`
+    : `走子${g.sel?' · 选中棋子，点击相邻空点':''}`;
+  return pn(g.turn) + ' ' + ph;
+}
+function pn(p) { return p==='B' ? '⚫ 黑方' : '⚪ 白方'; }
+
+function refresh() {
+  const st = document.getElementById('status');
+  st.textContent = statusText();
+  st.className = g.mode==='capture' ? 'capture' : g.mode==='won' ? 'won' : '';
+
+  const ubtn = document.getElementById('ubtn');
+  ubtn.textContent = `悔棋 (${g.undosLeft})`;
+  ubtn.disabled = !g.prevState || g.undosLeft <= 0;
+
+  for (const p of ['B','W']) {
+    const id = p==='B' ? 'B' : 'W';
+    const card = document.getElementById('pc-'+id);
+    card.className = 'pcard';
+    if (g.mode==='won' && g.winner===p) card.classList.add('won');
+    else if (g.turn===p && g.mode!=='won') card.classList.add('active');
+
+    const on = countOn(p), hand = inHand(p), tot = g.total[p];
+    document.getElementById('ps-'+id).textContent =
+      `剩余 ${tot} 子 ｜ 棋盘 ${on} ｜ 手中 ${hand}`;
+  }
+}
+
+// ── 绘制 ─────────────────────────────────────────────────────────
+function draw() {
+  ctx.clearRect(0, 0, SZ, SZ);
+
+  // 棋盘底色（仿木纹渐变）
+  const bg = ctx.createLinearGradient(0,0,SZ,SZ);
+  bg.addColorStop(0, '#c49240');
+  bg.addColorStop(1, '#a87828');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, SZ, SZ);
+
+  // 浅木纹条纹
+  ctx.globalAlpha = 0.055;
+  for (let i=0; i<SZ; i+=10) {
+    ctx.fillStyle = i%20<10 ? '#000' : '#fff';
+    ctx.fillRect(i, 0, 5, SZ);
+  }
+  ctx.globalAlpha = 1;
+
+  // 外框
+  ctx.strokeStyle = '#5a2e0a';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(M-1, M-1, 4*CELL+2, 4*CELL+2);
+
+  // 网格线
+  ctx.strokeStyle = '#6b3810';
+  ctx.lineWidth = 1.5;
+  for (let i=0; i<5; i++) {
+    ctx.beginPath(); ctx.moveTo(M+i*CELL, M); ctx.lineTo(M+i*CELL, SZ-M); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(M, M+i*CELL); ctx.lineTo(SZ-M, M+i*CELL); ctx.stroke();
+  }
+
+  // 交叉点小圆点
+  ctx.fillStyle = '#5a2e0a';
+  for (let r=0;r<5;r++) for (let c=0;c<5;c++) {
+    const [x,y] = px(r,c);
+    ctx.beginPath(); ctx.arc(x,y,3.5,0,Math.PI*2); ctx.fill();
+  }
+
+  // 走子时高亮可落点
+  if (g.sel && g.phase==='move' && g.mode==='play') {
+    ctx.fillStyle = 'rgba(90,210,90,0.38)';
+    for (const [nr,nc] of adjEmpty(g.sel.r, g.sel.c)) {
+      const [x,y] = px(nr,nc);
+      ctx.beginPath(); ctx.arc(x,y,PR*0.65,0,Math.PI*2); ctx.fill();
+    }
+  }
+
+  // 棋子
+  for (let r=0;r<5;r++) for (let c=0;c<5;c++) {
+    const p = g.b[r][c]; if (!p) continue;
+    const [x,y] = px(r,c);
+    const isSel   = g.sel && g.sel.r===r && g.sel.c===c;
+    const isCapt  = g.mode==='capture' && p===opp(g.turn);
+    drawPiece(x, y, p, isSel, isCapt);
+  }
+
+  // 胜利遮罩
+  if (g.mode === 'won') {
+    ctx.fillStyle = 'rgba(0,0,0,0.58)';
+    ctx.fillRect(0,0,SZ,SZ);
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#f0d060';
+    ctx.font = 'bold 36px PingFang SC, Microsoft YaHei, sans-serif';
+    ctx.fillText(pn(g.winner) + ' 获胜！', SZ/2, SZ/2 - 22);
+
+    ctx.fillStyle = '#909898';
+    ctx.font = '16px PingFang SC, Microsoft YaHei, sans-serif';
+    ctx.fillText('点击「重新开始」再来一局', SZ/2, SZ/2 + 22);
+  }
+}
+
+function drawPiece(x, y, p, isSel, isCapt) {
+  // 阴影
+  ctx.shadowColor   = 'rgba(0,0,0,0.5)';
+  ctx.shadowBlur    = 8;
+  ctx.shadowOffsetX = 2;
+  ctx.shadowOffsetY = 3;
+
+  // 径向渐变棋子
+  const grd = ctx.createRadialGradient(x-PR*0.32, y-PR*0.32, PR*0.04, x, y, PR);
+  if (p === 'B') {
+    grd.addColorStop(0, '#707070');
+    grd.addColorStop(0.55, '#1e1e1e');
+    grd.addColorStop(1,   '#080808');
+  } else {
+    grd.addColorStop(0, '#ffffff');
+    grd.addColorStop(0.55, '#e8e8e8');
+    grd.addColorStop(1,   '#c0c0c0');
+  }
+  ctx.fillStyle = grd;
+  ctx.beginPath(); ctx.arc(x,y,PR,0,Math.PI*2); ctx.fill();
+
+  ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0;
+  ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
+
+  // 选中高亮
+  if (isSel) {
+    ctx.strokeStyle = '#40e840';
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(x,y,PR+4,0,Math.PI*2); ctx.stroke();
+  }
+
+  // 可提子高亮（红圈 + 叉）
+  if (isCapt) {
+    ctx.strokeStyle = '#ff4030';
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(x,y,PR+4,0,Math.PI*2); ctx.stroke();
+    ctx.lineWidth = 2;
+    const d = PR*0.42;
+    ctx.beginPath();
+    ctx.moveTo(x-d,y-d); ctx.lineTo(x+d,y+d);
+    ctx.moveTo(x+d,y-d); ctx.lineTo(x-d,y+d);
+    ctx.stroke();
+  }
+}
+
+// ── 规则折叠 ─────────────────────────────────────────────────────
+function toggleRules() {
+  const el = document.getElementById('rules');
+  const open = el.style.display === 'block';
+  el.style.display = open ? 'none' : 'block';
+  document.getElementById('rbtn').textContent = open ? '游戏规则 ▾' : '游戏规则 ▴';
+}
+
+// ── 启动 ─────────────────────────────────────────────────────────
+newGame();
+</script>
+</body>
+</html>
